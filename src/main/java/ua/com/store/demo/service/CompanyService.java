@@ -3,6 +3,8 @@ package ua.com.store.demo.service;
 import com.google.gson.Gson;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import pl.zankowski.iextrading4j.api.exception.IEXTradingException;
@@ -19,6 +21,7 @@ import java.io.InputStreamReader;
 import java.net.URL;
 import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -30,13 +33,24 @@ public class CompanyService {
 
     private final IextradingConfig iextradingConfig;
     private final CompanyRepo companyRepo;
+    private final KafkaTemplate<String, CompanyEntity> kafkaTemplate;
+
+    private static final String TOPIC = "CompanyTopic";
 
     @Scheduled(cron = "${scheduled.seconds}")
     public void saveCompany() {
         IEXCloudClient cloudClient = iextradingConfig.getConnection();
         var offset = companyRepo.count();
         List<CompanyJson> list = getAllCompanySymbols();
-        list.stream().skip(offset * limit).limit(limit).map(c -> convertIntoCompanyEntity(cloudClient, c)).filter(Objects::nonNull).forEach(companyRepo::save);
+        List<CompanyEntity> listCompany = list.stream().skip(offset * limit).limit(limit).map(c -> convertIntoCompanyEntity(cloudClient, c)).filter(Objects::nonNull).collect(Collectors.toList());
+        listCompany.forEach(companyRepo::save);
+        listCompany.forEach(e -> kafkaTemplate.send(TOPIC, e));
+    }
+
+    @KafkaListener(topics = "CompanyTopic",
+            groupId = "group_id")
+    public void getCompanyByKafka(CompanyEntity companyEntity) {
+        System.out.println(companyEntity);
     }
 
     private List<CompanyJson> getAllCompanySymbols() {
